@@ -1,249 +1,96 @@
-# SightCeption - AI-Powered Object Detection for Visually Impaired
+# SightCeption - AI Assistive Object Detection (MVP)
 
-An assistive technology project that helps visually impaired individuals identify objects through smart glasses with AI-powered object recognition. This implementation is an MVP simulation using Wokwi VSCode extension before building the actual hardware prototype.
+An assistive system that lets a user trigger a camera capture, run on-device/edge object detection on a server, and announce results via text-to-speech. This repo contains two ESP32 firmwares and a Python backend with both a Flask dashboard and a Streamlit UI.
 
 ## Project Structure
 
 ```
 SightCeption/
-├── circuit/              # Wokwi simulation circuit files and ESP32 firmware
-│   ├── diagram.json      # Wokwi circuit diagram
-│   ├── esp32_firmware.ino # ESP32 firmware code
-│   └── wokwi.toml        # Wokwi configuration
-└── flask/                # Flask server backend
-    ├── app.py            # Main Flask application
-    ├── mqtt_handler.py   # MQTT communication handler
-    ├── yolo_api.py       # Object detection via Ultralytics YOLO11
-    ├── test_mqtt.py      # MQTT testing utility
-    └── requirements.txt  # Python dependencies
+├── circuit/
+│   ├── SightCeption/                 # ESP32 DevKit/WROOM (wake word + signal + logs) - PlatformIO
+│   └── sightception-cam/             # ESP32-CAM AI Thinker (capture + image publish + logs) - PlatformIO
+└── flask/                            # Python backend
+    ├── app.py                        # Flask app: REST API + HTML dashboard (/dashboard)
+    ├── mqtt_handler.py               # MQTT client: image/command/logs wiring
+    ├── yolo_api.py                   # YOLO11 inference helper
+    ├── streamlit_app.py              # Streamlit dashboard (optional UI)
+    ├── received_images/current_image.jpg
+    └── requirements.txt
 ```
 
-## System Architecture
+## System Architecture (current)
 
-**Hardware Simulation Flow:**
+- ESP32 WROOM (wake word): publishes a wake-word signal.
+- ESP32-CAM: subscribes to wake-word and to a server command; captures a JPEG and publishes raw bytes.
+- Flask server: subscribes to image bytes, saves to `flask/received_images/current_image.jpg`, runs YOLO, generates TTS with gTTS, and provides a dashboard.
 
-1. User presses button on ESP32 → LED indicator activates
-2. ESP32 connects to WiFi → Establishes MQTT connection
-3. Button press triggers wake word simulation → Publishes MQTT message
-4. Flask server receives request → Processes with YOLO11 API
-5. Server generates TTS audio → Sends response via MQTT
-6. ESP32 plays audio through buzzer patterns
+### Dashboard features
 
-**MQTT Communication:**
+- Adjust Camera Angle: triggers a fresh capture and shows the new frame.
+- Test Object Detection: triggers capture → runs YOLO → displays detected classes and speaks them.
+- Activity Log: aggregates live MQTT logs from devices and server.
 
-- **Broker**: `broker.hivemq.com:1883` (public broker for MVP)
-- **Device Topics**: `sightception/device/{device_id}/wake_detected`, `image_request`
-- **Server Topics**: `sightception/server/{device_id}/audio_data`, `image_response`
+## MQTT Topic Map
 
-## Prerequisites
+- Broker: `broker.hivemq.com:1883`
+- Wakeword signal (ESP32 WROOM → all):
+  - `sightception/device/sightception-esp32-001/signal`
+- Server command to ESP32-CAM (capture-on-demand):
+  - `sightception/camera/command` (JSON: `{ "action": "capture_once" }`)
+- ESP32-CAM image publish (unchanged, raw JPEG bytes):
+  - `hydroshiba/esp32/cam_image`
+- Activity logs (live feed shown on dashboard):
+  - `sightception/logs/esp32wroom`
+  - `sightception/logs/esp32cam`
+  - `sightception/logs/server`
 
-### Software Requirements
+## Backend REST API (Flask)
 
-- **VSCode** with Wokwi extension
-- **Python 3.8+** with pip
-- **Arduino libraries**: WiFi, PubSubClient
+- `POST /api/capture` — Sends capture command and waits briefly for a fresh image.
+- `POST /api/detect` — Capture → YOLO detect → returns `{ detected: string[], latest_image_url }` and plays TTS locally.
+- `GET /api/status` — Returns `{ latest_image_url, activity, broker, device }`.
+- `GET /images/current_image.jpg` — Serves last received frame (cache-busted by the UIs).
 
-### Python Dependencies
+## Getting Started
+
+### 1) Install backend deps
 
 ```bash
 pip install -r flask/requirements.txt
 ```
 
-## Quick Start
-
-### 1. ESP32 Simulation (Wokwi)
-
-**Start the simulation:**
-
-```bash
-# Open circuit directory in VSCode
-code circuit/
-
-# Press F1 → "Wokwi: Start Simulator"
-# Or use Ctrl+Shift+P → "Wokwi: Start Simulator"
-```
-
-**Expected Behavior:**
-
-- ESP32 connects to WiFi (Wokwi-GUEST)
-- Establishes MQTT connection to broker.hivemq.com
-- Green button press → LED lights up → MQTT messages sent
-- Serial monitor shows connection status and message flow
-
-### 2. Flask Server Testing
-
-**Option A: Quick MQTT Test**
-
-```bash
-cd flask
-python test_mqtt.py
-```
-
-This will connect to the MQTT broker and simulate server responses when you press the ESP32 button.
-
-**Option B: Full Flask Server**
+### 2) Run the Flask backend
 
 ```bash
 cd flask
 python app.py
 ```
 
-### 3. Testing the Complete Flow
+### 3) Streamlit dashboard
 
-1. **Start the MQTT test server**: `python flask/test_mqtt.py`
-2. **Start Wokwi simulation** in VSCode
-3. **Wait for connections**: Both should show "Connected to MQTT broker"
-4. **Press the green button** in Wokwi
-5. **Observe the flow**:
-   - LED lights up on ESP32
-   - Serial monitor shows wake word detection
-   - MQTT messages appear in test server
-   - Server responds with mock object detection
-   - ESP32 plays buzzer tones for audio response
-
-## Hardware Configuration
-
-### ESP32 Pin Mapping
-
-- **Button**: GPIO 15 (INPUT_PULLUP)
-- **LED**: GPIO 2 (Status indicator)
-- **Buzzer**: GPIO 4 (Audio output simulation)
-
-### Wokwi Circuit
-
-The `diagram.json` includes:
-
-- ESP32 DevKit V1
-- Push button with pull-up resistor
-- LED with current-limiting resistor
-- Buzzer for audio feedback
-
-## Troubleshooting
-
-### ⚠️ Common Issue: ESP32 Hangs After Button Press
-
-**Symptoms:**
-
-- Button press lights up LED ✅
-- No serial monitor output after button press ❌
-- No MQTT messages sent ❌
-- ESP32 appears to freeze ❌
-
-**Root Cause:**
-The ESP32 code was hanging during MQTT connection attempts in Wokwi simulation due to blocking network operations without proper timeouts.
-
-**✅ Solution Implemented:**
-The firmware now includes:
-
-1. **Non-blocking MQTT connection** with 10-second timeout
-2. **Detailed debug output** to track execution flow
-3. **Proper error handling** for connection failures
-4. **Retry mechanism** with 5-second intervals
-5. **Connection state management** to prevent hangs
-
-**Key Code Changes:**
-
-```cpp
-// Non-blocking MQTT with timeout
-bool connectMQTTWithTimeout() {
-  unsigned long startTime = millis();
-
-  if (client.connect(device_id)) {
-    return true;
-  }
-
-  if (millis() - startTime > connectionTimeout) {
-    Serial.println("MQTT connection timeout");
-    return false;
-  }
-
-  return false;
-}
-
-// Separate connection handling in main loop
-void handleMQTTConnection() {
-  if (!mqttConnected && (millis() - lastConnectionAttempt > 5000)) {
-    // Attempt connection with timeout
-    if (connectMQTTWithTimeout()) {
-      mqttConnected = true;
-      // Subscribe to topics
-    }
-  }
-}
+```bash
+streamlit run flask/streamlit_app.py
+# Set the backend URL in the sidebar (default http://127.0.0.1:5000/)
 ```
 
-### Debug Steps
+### 4) Flash the devices (PlatformIO)
 
-1. **Check Serial Monitor Output:**
+- Open `circuit/SightCeption/` and `circuit/sightception-cam/` in VSCode with PlatformIO.
+- Configure Wi‑Fi and broker if needed.
+- Build & upload each firmware to the respective board.
 
-   ```
-   === SightCeption ESP32 Starting ===
-   Pins initialized
-   WiFi connected!
-   Setup complete - ready for button press
-   ```
+## How it works (end-to-end)
 
-2. **Test MQTT Connectivity:**
+1. Wake word on ESP32 WROOM publishes to `sightception/device/sightception-esp32-001/signal`.
+2. ESP32-CAM listens to the signal; it also listens to server command `sightception/camera/command`.
+3. When the dashboard sends “Capture Image” or “Run Detection”, the server publishes `{action:"capture_once"}` to the command topic.
+4. ESP32-CAM captures a frame and publishes raw JPEG bytes to `hydroshiba/esp32/cam_image`.
+5. Flask receives, writes `flask/received_images/current_image.jpg`, updates the dashboard.
+6. For detection, Flask runs YOLO11 and announces results via gTTS + pygame.
+7. All components push logs to `sightception/logs/#`, shown on the dashboard.
 
-   ```bash
-   cd flask
-   python test_mqtt.py
-   # Should show: ✅ Connected to MQTT broker successfully!
-   ```
+## Notes
 
-3. **Verify Button Response:**
-   - Press button in Wokwi
-   - Check for "=== BUTTON PRESSED ===" in serial output
-   - LED should light up for 2 seconds
-
-### Network Issues
-
-**WiFi Connection Failed:**
-
-- Ensure using "Wokwi-GUEST" network in code
-- Check Wokwi IoT Gateway is enabled in `wokwi.toml`
-
-**MQTT Connection Failed:**
-
-- Verify broker.hivemq.com is accessible
-- Check firewall/proxy settings
-- Try alternative broker: `test.mosquitto.org`
-
-## Development Notes
-
-### YOLO Integration
-
-- Uses Ultralytics YOLO11 model via direct library integration
-- Processes test images from `flask/test_images/` directory
-- Generates TTS audio using gTTS library
-
-### MQTT Architecture
-
-- **Pub/Sub Pattern**: Device publishes requests, server publishes responses
-- **JSON Payloads**: Structured data with request IDs for correlation
-- **Topic Hierarchy**: Organized by device/server and function
-
-### Simulation Limitations
-
-- **Audio**: Simulated via buzzer tone patterns
-- **Camera**: Uses pre-stored test images
-- **Wake Word**: Simulated by button press
-- **Network**: Uses Wokwi's virtual WiFi environment
-
-## Hardware Migration
-
-When migrating to actual hardware:
-
-1. **Replace Wokwi-GUEST** with actual WiFi credentials
-2. **Add real camera module** (ESP32-CAM recommended)
-3. **Integrate actual wake word detection** (Edge Impulse)
-4. **Add proper audio output** (I2S DAC + speaker)
-5. **Update MQTT broker** to production instance (AWS IoT Core/HiveMQ Cloud)
-
-## License
-
-This project is part of an academic IoT course implementation.
-
----
-
-**Status**: ✅ **RESOLVED** - MQTT hanging issue fixed with non-blocking connection logic and proper timeout handling.
+- Images are written to `flask/received_images/current_image.jpg` and served via `/images/current_image.jpg`.
+- YOLO model is loaded by `flask/yolo_api.py` (Ultralytics YOLO11).
+- TTS output is saved to `flask/received_images/detection_audio.mp3` and played locally by the server.

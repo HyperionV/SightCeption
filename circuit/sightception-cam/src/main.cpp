@@ -44,6 +44,8 @@ PubSubClient client(espClient);
 bool imageRequested = false;
 unsigned long lastSignalTime = 0;
 const unsigned long SIGNAL_TIMEOUT = 10000;  // 10 seconds timeout
+static uint32_t imageCounter = 0;  // Simple increasing image ID
+static const size_t CHUNK_SIZE = 2048;  // 2KB chunks
 
 void reconnect() {
   // Fixed: Infinite retry like working version, no attempt limit
@@ -148,37 +150,49 @@ void captureAndSendImage() {
     return;
   }
 
-  // Publish image to your existing topic
-  Serial.println("Publishing image...");
-  bool published = client.publish(publish_topic, (const uint8_t *)fb->buf, fb->len);
+  // Publish image via chunking over MQTT
+  imageCounter++;
+  const uint32_t imageId = imageCounter;
+  const size_t totalChunks = (fb->len + CHUNK_SIZE - 1) / CHUNK_SIZE;
 
-  if(published) {
-    Serial.println("✓ Image published successfully!");
-    Serial.print("Published to topic: ");
-    Serial.println(publish_topic);
-    Serial.printf("Image size: %u bytes\n", fb->len);
-    client.publish(logs_topic, "esp32cam: image published");
-  } else {
-    Serial.println("✗ Image publish failed!");
-    Serial.print("MQTT Client State: ");
-    Serial.println(client.state());
-    Serial.printf("Client connected: %s\n", client.connected() ? "YES" : "NO");
-    Serial.printf("Image size: %u bytes\n", fb->len);
-    client.publish(logs_topic, "esp32cam: image publish failed");
-    
-    // Print common error states
-    switch(client.state()) {
-      case -4: Serial.println("Error: Connection timeout"); break;
-      case -3: Serial.println("Error: Connection lost"); break;
-      case -2: Serial.println("Error: Connect failed"); break;
-      case -1: Serial.println("Error: Disconnected"); break;
-      case 1: Serial.println("Error: Bad protocol"); break;
-      case 2: Serial.println("Error: Bad client ID"); break;
-      case 3: Serial.println("Error: Unavailable"); break;
-      case 4: Serial.println("Error: Bad credentials"); break;
-      case 5: Serial.println("Error: Unauthorized"); break;
+  // start topic: hydroshiba/esp32/cam_image/<image_id>/start
+  char startTopic[96];
+  snprintf(startTopic, sizeof(startTopic), "%s/%lu/start", publish_topic, (unsigned long)imageId);
+
+  // start payload JSON (small)
+  char startPayload[128];
+  snprintf(startPayload, sizeof(startPayload), "{\"image_id\":%lu,\"size\":%u,\"total\":%u}",
+           (unsigned long)imageId, (unsigned)fb->len, (unsigned)totalChunks);
+
+  Serial.printf("Publishing start: %s => %s\n", startTopic, startPayload);
+  client.publish(startTopic, startPayload);
+
+  // chunk topics: hydroshiba/esp32/cam_image/<image_id>/chunk/<idx>
+  char chunkTopic[112];
+  size_t offset = 0;
+  for (size_t idx = 0; idx < totalChunks; ++idx) {
+    const size_t remaining = fb->len - offset;
+    const size_t toSend = remaining < CHUNK_SIZE ? remaining : CHUNK_SIZE;
+    snprintf(chunkTopic, sizeof(chunkTopic), "%s/%lu/chunk/%u", publish_topic, (unsigned long)imageId, (unsigned)idx);
+    const uint8_t* chunkPtr = fb->buf + offset;
+    bool ok = client.publish(chunkTopic, (const uint8_t*)chunkPtr, toSend);
+    if (!ok) {
+      Serial.printf("✗ Chunk publish failed at idx %u (size %u)\n", (unsigned)idx, (unsigned)toSend);
+      client.publish(logs_topic, "esp32cam: chunk publish failed");
+      break;  // Minimal: stop on first failure
     }
+    offset += toSend;
   }
+
+  // end topic: hydroshiba/esp32/cam_image/<image_id>/end
+  char endTopic[96];
+  snprintf(endTopic, sizeof(endTopic), "%s/%lu/end", publish_topic, (unsigned long)imageId);
+  char endPayload[64];
+  snprintf(endPayload, sizeof(endPayload), "{\"image_id\":%lu}", (unsigned long)imageId);
+
+  client.publish(endTopic, endPayload);
+  Serial.printf("✓ Image %lu published in %u chunks (size %u bytes)\n", (unsigned long)imageId, (unsigned)totalChunks, (unsigned)fb->len);
+  client.publish(logs_topic, "esp32cam: image published (chunked)");
 
   // CRITICAL: Always return the frame buffer to prevent memory leaks
   esp_camera_fb_return(fb);
