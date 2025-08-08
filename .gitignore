@@ -1,0 +1,9 @@
+received_images/
+final/
+
+.vscode
+test
+
+.pio
+
+__pycache__

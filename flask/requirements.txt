@@ -1,0 +1,8 @@
+flask
+gtts
+requests
+pillow
+numpy
+ultralytics
+paho-mqtt
+pygame 
