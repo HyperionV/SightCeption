@@ -37,6 +37,13 @@ class SightCeptionMQTTHandler:
         self.image_received_callback = None  # Callback for immediate image processing
         self.signal_callback = None  # Callback for signal messages
         self.log_callback = None  # Callback for generic log messages
+        # In-memory reassembly buffer for chunked images (single connection assumed)
+        self._assembling = False
+        self._current_image_id = None
+        self._expected_total = 0
+        self._received_chunks = 0
+        self._image_size = 0
+        self._buffer = bytearray()
 
     def _on_connect(self, client, userdata, flags, rc, properties):
         """
@@ -56,6 +63,14 @@ class SightCeptionMQTTHandler:
                 logging.info(f"Subscribed to logs topic: {logs_topic}")
             except Exception as e:
                 logging.warning(f"Failed to subscribe to logs topic: {e}")
+
+            # Subscribe to chunked image topics (wildcard)
+            try:
+                base = "hydroshiba/esp32/cam_image/#"
+                self.client.subscribe(base)
+                logging.info(f"Subscribed to chunked image topics: {base}")
+            except Exception as e:
+                logging.warning(f"Failed to subscribe to chunked topics: {e}")
         else:
             logging.error(f"Failed to connect, return code {rc}")
 
@@ -79,9 +94,14 @@ class SightCeptionMQTTHandler:
                         logging.error(f"Error in log callback: {e}")
                 return
                 
-            # Handle raw image data from ESP32 camera
+            # Handle raw image data from ESP32 camera (legacy single message)
             if msg.topic == "hydroshiba/esp32/cam_image":
                 self._handle_raw_image_data(msg)
+                return
+
+            # Handle chunked image protocol
+            if msg.topic.startswith("hydroshiba/esp32/cam_image/"):
+                self._handle_chunked_image(msg)
                 return
                 
             # Handle image data separately
@@ -197,6 +217,78 @@ class SightCeptionMQTTHandler:
                 
         except Exception as e:
             logging.error(f"Error handling raw image data: {e}")
+
+    def _handle_chunked_image(self, msg):
+        """Reassemble chunked image sent over MQTT topics:
+        hydrosiba/esp32/cam_image/<image_id>/start -> JSON {image_id,size,total}
+        hydrosiba/esp32/cam_image/<image_id>/chunk/<idx> -> raw bytes
+        hydrosiba/esp32/cam_image/<image_id>/end -> JSON {image_id}
+        """
+        try:
+            parts = msg.topic.split('/')
+            # Expect: [hydroshiba, esp32, cam_image, <image_id>, ...]
+            if len(parts) < 4:
+                return
+            image_id = parts[3]
+
+            if len(parts) == 5 and parts[4] == 'start':
+                # Initialize assembly
+                payload = msg.payload.decode(errors='ignore')
+                try:
+                    meta = json.loads(payload)
+                    total = int(meta.get('total', 0))
+                    size = int(meta.get('size', 0))
+                except Exception:
+                    total, size = 0, 0
+                self._assembling = True
+                self._current_image_id = image_id
+                self._expected_total = total
+                self._image_size = size
+                self._received_chunks = 0
+                self._buffer = bytearray()
+                logging.info(f"Chunked image start: id={image_id} total={total} size={size}")
+                return
+
+            if len(parts) == 6 and parts[4] == 'chunk':
+                # Append chunk only if assembling for this image id
+                if not self._assembling or self._current_image_id != image_id:
+                    return
+                self._buffer.extend(msg.payload)
+                self._received_chunks += 1
+                return
+
+            if len(parts) == 5 and parts[4] == 'end':
+                # Finalize
+                if not self._assembling or self._current_image_id != image_id:
+                    return
+                ok_len = (self._image_size == 0) or (len(self._buffer) == self._image_size)
+                ok_cnt = (self._expected_total == 0) or (self._received_chunks == self._expected_total)
+                if ok_len and ok_cnt and len(self._buffer) > 0:
+                    image_filename = "current_image.jpg"
+                    image_path = os.path.join(os.path.dirname(__file__), "received_images", image_filename)
+                    os.makedirs(os.path.dirname(image_path), exist_ok=True)
+                    with open(image_path, 'wb') as f:
+                        f.write(self._buffer)
+                    self.latest_image_path = image_path
+                    self.image_received = True
+                    logging.info(f"Chunked image saved: {image_path} (chunks={self._received_chunks}, bytes={len(self._buffer)})")
+                    if self.image_received_callback:
+                        try:
+                            self.image_received_callback()
+                        except Exception as e:
+                            logging.error(f"Error in image_received_callback: {e}")
+                else:
+                    logging.warning(f"Chunked image incomplete: id={image_id} chunks={self._received_chunks}/{self._expected_total} bytes={len(self._buffer)}/{self._image_size}")
+                # Reset state
+                self._assembling = False
+                self._current_image_id = None
+                self._expected_total = 0
+                self._received_chunks = 0
+                self._image_size = 0
+                self._buffer = bytearray()
+                return
+        except Exception as e:
+            logging.error(f"Error handling chunked image: {e}")
 
     def register_callback(self, event_type, function):
         """
