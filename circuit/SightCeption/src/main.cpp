@@ -10,6 +10,7 @@ const char* mqtt_server = "broker.hivemq.com";
 const int mqtt_port = 1883;
 const char* device_id = "sightception-esp32-001";
 const char* topic_signal = "sightception/device/sightception-esp32-001/signal";
+const char* topic_logs   = "sightception/logs/esp32wroom"; // new: activity logs
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -133,6 +134,7 @@ void connectToMQTT() {
   if (client.connect(device_id)) {
     Serial.println(" connected!");
     mqttConnected = true;
+    client.publish(topic_logs, "esp32wroom: connected");
   } else {
     Serial.print(" failed, rc=");
     Serial.print(client.state());
@@ -157,8 +159,10 @@ void publishWakeWordSignal() {
   
   if (client.publish(topic_signal, message.c_str())) {
     Serial.println("Wake word signal published successfully!");
+    client.publish(topic_logs, "esp32wroom: wakeword signal published");
   } else {
     Serial.println("Failed to publish wake word signal");
+    client.publish(topic_logs, "esp32wroom: wakeword signal publish failed");
   }
 }
 
@@ -340,7 +344,6 @@ void performWakewordDetection() {
     
     publishWakeWordSignal();
     
-    // Replace LED blinking with buzzer pattern
     buzzerPattern();
     
   } else {
@@ -354,7 +357,7 @@ void performWakewordDetection() {
 
 void handleRoot() {
   String status = wakewordDetected ? "DETECTED" : "NOT DETECTED";
-  String buzzerStatus = "READY"; // Buzzer is always ready
+  String buzzerStatus = "READY";
   
   String html = "<!DOCTYPE html><html><head>";
   html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
@@ -684,7 +687,7 @@ void setup() {
   Serial.begin(115200);
   
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  setupBuzzer(); // Initialize buzzer instead of LED
+  setupBuzzer();
   
   attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
   

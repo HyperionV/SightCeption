@@ -2,7 +2,7 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 
-#define MQTT_MAX_PACKET_SIZE 30000  // Changed back to working version size
+#define MQTT_MAX_PACKET_SIZE 30000  
 #include <PubSubClient.h>
 
 // Wi-Fi credentials
@@ -15,6 +15,9 @@ const int mqtt_port = 1883;
 const char* device_id = "ESP32-CAM-Client";
 const char* publish_topic = "hydroshiba/esp32/cam_image";  // Your existing topic
 const char* subscribe_topic = "sightception/device/sightception-esp32-001/signal";  // Listen for wake word
+// New: dashboard control & logs topics
+const char* command_topic = "sightception/camera/command";     // Server triggers capture
+const char* logs_topic    = "sightception/logs/esp32cam";      // Activity logs
 
 // Pin definition for AI-Thinker ESP32-CAM
 #define PWDN_GPIO_NUM     32
@@ -58,6 +61,15 @@ void reconnect() {
       } else {
         Serial.println("Failed to subscribe to wake word signals");
       }
+
+      // Subscribe to dashboard command topic (minimal addition)
+      if (client.subscribe(command_topic)) {
+        Serial.print("Subscribed to command topic: ");
+        Serial.println(command_topic);
+      }
+
+      // Log connected
+      client.publish(logs_topic, "esp32cam: connected");
       
     } else {
       Serial.print(" failed, rc=");
@@ -89,9 +101,18 @@ void callback(char* topic, byte* payload, unsigned int length) {
       Serial.println("Valid wake word signal detected - triggering image capture");
       imageRequested = true;
       lastSignalTime = millis();
+      client.publish(logs_topic, "esp32cam: wakeword signal -> capture");
     } else {
       Serial.println("Invalid signal format - ignoring");
       Serial.println("Expected JSON with device_id and timestamp fields");
+    }
+  } else if (String(topic) == command_topic) {
+    // Minimal command handler: expect {"action":"capture_once"}
+    if (message.indexOf("capture_once") != -1) {
+      Serial.println("Dashboard command: capture_once");
+      imageRequested = true;
+      lastSignalTime = millis();
+      client.publish(logs_topic, "esp32cam: command capture_once");
     }
   } else {
     Serial.println("Message from unknown topic - ignoring");
@@ -136,12 +157,14 @@ void captureAndSendImage() {
     Serial.print("Published to topic: ");
     Serial.println(publish_topic);
     Serial.printf("Image size: %u bytes\n", fb->len);
+    client.publish(logs_topic, "esp32cam: image published");
   } else {
     Serial.println("✗ Image publish failed!");
     Serial.print("MQTT Client State: ");
     Serial.println(client.state());
     Serial.printf("Client connected: %s\n", client.connected() ? "YES" : "NO");
     Serial.printf("Image size: %u bytes\n", fb->len);
+    client.publish(logs_topic, "esp32cam: image publish failed");
     
     // Print common error states
     switch(client.state()) {
