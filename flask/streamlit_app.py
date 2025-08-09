@@ -27,7 +27,7 @@ def get_backend_base_url() -> str:
     return base
 
 
-def api_get(path: str, timeout: float = 8.0):
+def api_get(path: str, timeout: float = 15.0):
     base = get_backend_base_url()
     try:
         r = requests.get(urljoin(base, path.lstrip('/')), timeout=timeout)
@@ -38,7 +38,7 @@ def api_get(path: str, timeout: float = 8.0):
         return None
 
 
-def api_post(path: str, timeout: float = 8.0):
+def api_post(path: str, timeout: float = 15.0):
     base = get_backend_base_url()
     try:
         r = requests.post(urljoin(base, path.lstrip('/')), timeout=timeout)

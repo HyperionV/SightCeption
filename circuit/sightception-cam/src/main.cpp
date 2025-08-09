@@ -43,9 +43,9 @@ PubSubClient client(espClient);
 // State management
 bool imageRequested = false;
 unsigned long lastSignalTime = 0;
-const unsigned long SIGNAL_TIMEOUT = 10000;  // 10 seconds timeout
+const unsigned long SIGNAL_TIMEOUT = 30000;  // 30 seconds timeout
 static uint32_t imageCounter = 0;  // Simple increasing image ID
-static const size_t CHUNK_SIZE = 2048;  // 2KB chunks
+static const size_t CHUNK_SIZE = 8096;  // 8KB chunks
 
 void reconnect() {
   // Fixed: Infinite retry like working version, no attempt limit
@@ -228,8 +228,8 @@ void setup() {
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_VGA;  // Keep reduced size for reliability
-  config.jpeg_quality = 12;  // Use working version's quality setting
+  config.frame_size = FRAMESIZE_SVGA;  // Keep reduced size for reliability
+  config.jpeg_quality = 8;  // Use working version's quality setting
   config.fb_count = 2;
 
   // Camera init

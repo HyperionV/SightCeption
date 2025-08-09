@@ -208,7 +208,7 @@ if __name__ == "__main__":
         push_log("server", f"Capture command sent: {ok}")
 
         # Wait up to 6s for a new image
-        deadline = time.time() + 6.0
+        deadline = time.time() + 15.0
         latest_url = None
         while time.time() < deadline:
             if os.path.exists(img_path):
